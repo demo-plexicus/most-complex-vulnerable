@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Search Results</title>
+</head>
+<body>
+    <h1>Search Results</h1>
+    <!-- XSS vulnerability: user input is directly rendered without escaping -->
+    <div th:utext="${result}"></div>
+</body>
+</html>

@@ -1,0 +1,30 @@
+{
+  "name": "complex-vulnerable-monorepo",
+  "version": "1.0.0",
+  "description": "A monorepo containing complex vulnerabilities to test SAST tools",
+  "private": true,
+  "workspaces": [
+    "java-app",
+    "php-app",
+    "go-app"
+  ],
+  "scripts": {
+    "build": "npm run build:java && npm run build:php && npm run build:go",
+    "build:java": "cd java-app && mvn compile",
+    "build:php": "echo 'PHP app ready for testing'",
+    "build:go": "cd go-app && go build -o app",
+    "test:sast": "echo 'Run your SAST tool against this monorepo to test detection capabilities'",
+    "clean": "rm -rf java-app/target go-app/app"
+  },
+  "keywords": [
+    "sast",
+    "security",
+    "vulnerability",
+    "testing",
+    "java",
+    "php",
+    "go"
+  ],
+  "author": "Security Research Team",
+  "license": "MIT"
+}

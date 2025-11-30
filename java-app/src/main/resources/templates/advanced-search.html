@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Advanced Search Results</title>
+</head>
+<body>
+    <h1>Advanced Search Results</h1>
+    <!-- Complex XSS vulnerability with nested HTML structure -->
+    <div th:utext="${results}"></div>
+</body>
+</html>
