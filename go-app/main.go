@@ -11,31 +11,48 @@ import (
 )
 
 /**
- * Complex RCE vulnerability with goroutines and channels
- * This demonstrates parser failures in IfStmt() and SelectStmt()
+ * Secure command execution with whitelist validation
+ * Only allows predefined safe commands
  */
 func handler(w http.ResponseWriter, r *http.Request) {
 	cmd := r.URL.Query().Get("cmd")
 
-	// The parser fails in IfStmt() - "Started 4 blocks at once"
+	// Whitelist of allowed commands
+	allowedCommands := map[string]bool{
+		"date":     true,
+		"whoami":   true,
+		"hostname": true,
+		"uptime":   true,
+		"ls":       true,
+		"pwd":      true,
+		"id":       true,
+		"uname":    true,
+	}
+
 	if cmd != "" {
+		// Validate command against whitelist
+		if !allowedCommands[cmd] {
+			http.Error(w, "Command not allowed", http.StatusForbidden)
+			return
+		}
+
 		// Goroutine with complex channel operations
 		resultChan := make(chan string)
 
 		go func() {
-			// Command execution not detected by SAST
-			out, err := exec.Command("sh", "-c", cmd).CombinedOutput()
+			// Command execution with whitelisted command only
+			out, err := exec.Command(cmd).CombinedOutput()
 			if err != nil {
 				resultChan <- fmt.Sprintf("Error: %v", err)
 				return
 			}
-			resultChan <- string(out) // RCE vulnerability
+			resultChan <- string(out)
 		}()
 
 		// Select statement not analyzed correctly
 		select {
 		case result := <-resultChan:
-			fmt.Fprintf(w, result) // Command output rendered directly
+			fmt.Fprintf(w, result)
 		case <-time.After(time.Second * 5):
 			fmt.Fprintf(w, "Command execution timeout")
 		}
@@ -50,7 +67,27 @@ func handler(w http.ResponseWriter, r *http.Request) {
 func advancedHandler(w http.ResponseWriter, r *http.Request) {
 	commands := r.URL.Query()["cmd"]
 
+	// Whitelist of allowed commands
+	allowedCommands := map[string]bool{
+		"date":     true,
+		"whoami":   true,
+		"hostname": true,
+		"uptime":   true,
+		"ls":       true,
+		"pwd":      true,
+		"id":       true,
+		"uname":    true,
+	}
+
 	if len(commands) > 0 {
+		// Validate each command against whitelist
+		for _, cmd := range commands {
+			if !allowedCommands[cmd] {
+				http.Error(w, "Command not allowed", http.StatusForbidden)
+				return
+			}
+		}
+
 		// Multiple goroutines with complex synchronization
 		results := make([]chan string, len(commands))
 
@@ -59,7 +96,7 @@ func advancedHandler(w http.ResponseWriter, r *http.Request) {
 
 			go func(cmd string, resultChan chan string) {
 				// Complex command execution with error handling
-				out, err := exec.Command("bash", "-c", cmd).Output()
+				out, err := exec.Command(cmd).Output()
 				if err != nil {
 					resultChan <- fmt.Sprintf("Failed: %v", err)
 					return
@@ -89,12 +126,30 @@ func conditionalHandler(w http.ResponseWriter, r *http.Request) {
 	cmd := r.URL.Query().Get("cmd")
 	mode := r.URL.Query().Get("mode")
 
+	// Whitelist of allowed commands
+	allowedCommands := map[string]bool{
+		"date":     true,
+		"whoami":   true,
+		"hostname": true,
+		"uptime":   true,
+		"ls":       true,
+		"pwd":      true,
+		"id":       true,
+		"uname":    true,
+	}
+
 	// Complex if-else chain that breaks SAST parsing
 	if mode == "async" && cmd != "" {
+		// Validate command against whitelist
+		if !allowedCommands[cmd] {
+			http.Error(w, "Command not allowed", http.StatusForbidden)
+			return
+		}
+
 		resultChan := make(chan string, 1)
 
 		go func() {
-			out, _ := exec.Command("sh", "-c", cmd).Output()
+			out, _ := exec.Command(cmd).Output()
 			resultChan <- string(out)
 		}()
 
@@ -105,8 +160,14 @@ func conditionalHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "Async timeout")
 		}
 	} else if mode == "sync" && cmd != "" {
+		// Validate command against whitelist
+		if !allowedCommands[cmd] {
+			http.Error(w, "Command not allowed", http.StatusForbidden)
+			return
+		}
+
 		// Direct execution without goroutine
-		out, err := exec.Command("sh", "-c", cmd).Output()
+		out, err := exec.Command(cmd).Output()
 		if err != nil {
 			fmt.Fprintf(w, "Error: %v", err)
 			return
@@ -156,3 +217,4 @@ func main() {
 	log.Println("Starting vulnerable Go server on :8080")
 	log.Fatal(http.ListenAndServe(":8080", r))
 }
+
