@@ -19,18 +19,24 @@ class UserController {
      */
     public function search($input) {
         // Complex casting that breaks SAST parsers
-        $table = (string)($_GET['type'] ?? 'users'); // Cast expression complexity
+        $table = (string)($_GET['type'] ?? 'users');
 
-        // Dynamic function construction - not traced by LSTUsagesVisitor
-        $func = "get_" . $table . "_data"; // String concatenation for function name
+        // Allow-list the table name to prevent SQL injection on dynamic identifiers
+        $allowedTables = ['users', 'products'];
+        if (!in_array($table, $allowedTables, true)) {
+            $table = 'users';
+        }
 
-        // Call dynamic function - SAST cannot resolve this
-        $data = $this->$func($input); // Method call through variable
+        // Dynamic function construction
+        $func = "get_" . $table . "_data";
 
-        // Complex string interpolation with SQL injection
-        $sql = "SELECT * FROM {$table} WHERE name LIKE '%{$input}%'"; // SQLi vulnerability
+        // Call dynamic function
+        $data = $this->$func($input);
 
-        return $this->db->query($sql);
+        // Use parameterized query instead of string interpolation
+        $sql = "SELECT * FROM {$table} WHERE name LIKE ?";
+
+        return $this->db->executeQuery($sql, ['%' . $input . '%']);
     }
 
     /**
@@ -55,21 +61,42 @@ class UserController {
         $tableName = (string)($_POST['entity'] ?? 'users');
         $searchTerm = (string)($filters['q'] ?? '');
 
-        // Multiple string concatenations and interpolations
-        $whereClause = "";
+        // Allow-list the table name
+        $allowedTables = ['users', 'products'];
+        if (!in_array($tableName, $allowedTables, true)) {
+            $tableName = 'users';
+        }
+
+        // Use parameterized query with bound parameters
+        $params = [];
+        $conditions = [];
+
+        // Allow-listed fields for dynamic column names
+        $allowedFields = ['category', 'status', 'name', 'description'];
+
         foreach ($filters as $field => $value) {
-            if ($field !== 'q') {
-                $whereClause .= " AND {$field} = '{$value}'"; // Additional SQLi
+            if ($field !== 'q' && $field !== 'entity' && $field !== 'action') {
+                if (in_array($field, $allowedFields, true)) {
+                    $conditions[] = "{$field} = ?";
+                    $params[] = $value;
+                }
             }
         }
 
-        // Complex SQL construction with multiple vulnerabilities
-        $finalSql = "SELECT * FROM {$tableName} WHERE 1=1 {$whereClause}";
-
-        if (!empty($searchTerm)) {
-            $finalSql .= " AND (name LIKE '%{$searchTerm}%' OR description LIKE '%{$searchTerm}%')";
+        $whereClause = '';
+        if (!empty($conditions)) {
+            $whereClause = ' AND ' . implode(' AND ', $conditions);
         }
 
-        return $this->db->query($finalSql);
+        $finalSql = "SELECT * FROM {$tableName} WHERE 1=1{$whereClause}";
+
+        if (!empty($searchTerm)) {
+            $finalSql .= " AND (name LIKE ? OR description LIKE ?)";
+            $params[] = '%' . $searchTerm . '%';
+            $params[] = '%' . $searchTerm . '%';
+        }
+
+        return $this->db->executeQuery($finalSql, $params);
     }
 }
+
