@@ -27,10 +27,16 @@ class UserController {
         // Call dynamic function - SAST cannot resolve this
         $data = $this->$func($input); // Method call through variable
 
-        // Complex string interpolation with SQL injection
-        $sql = "SELECT * FROM {$table} WHERE name LIKE '%{$input}%'"; // SQLi vulnerability
+        // Allow-list for table names to prevent SQL injection on dynamic identifiers
+        $allowedTables = ['users', 'products'];
+        $tableName = in_array($table, $allowedTables, true) ? $table : 'users';
 
-        return $this->db->query($sql);
+        // Use a prepared statement to prevent SQL injection
+        $sql = "SELECT * FROM {$tableName} WHERE name LIKE ?";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute(['%' . $input . '%']);
+
+        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }
 
     /**
@@ -49,27 +55,39 @@ class UserController {
 
     /**
      * Additional complex method with nested string operations
+     * Now fixed to use prepared statements and input validation
      */
     public function advancedSearch($filters) {
-        // Complex variable handling with multiple operations
-        $tableName = (string)($_POST['entity'] ?? 'users');
+        // Allow-list for table names
+        $allowedTables = ['users', 'products'];
+        $rawTable = (string)($filters['entity'] ?? 'users');
+        $tableName = in_array($rawTable, $allowedTables, true) ? $rawTable : 'users';
+
         $searchTerm = (string)($filters['q'] ?? '');
 
-        // Multiple string concatenations and interpolations
-        $whereClause = "";
+        // Build parameterized query
+        $sql = "SELECT * FROM {$tableName} WHERE 1=1";
+        $params = [];
+
+        // Only allow known, safe filter fields
+        $allowedFields = ['category', 'status'];
         foreach ($filters as $field => $value) {
-            if ($field !== 'q') {
-                $whereClause .= " AND {$field} = '{$value}'"; // Additional SQLi
+            if ($field !== 'q' && $field !== 'entity' && in_array($field, $allowedFields, true)) {
+                $sql .= " AND {$field} = ?";
+                $params[] = $value;
             }
         }
 
-        // Complex SQL construction with multiple vulnerabilities
-        $finalSql = "SELECT * FROM {$tableName} WHERE 1=1 {$whereClause}";
-
         if (!empty($searchTerm)) {
-            $finalSql .= " AND (name LIKE '%{$searchTerm}%' OR description LIKE '%{$searchTerm}%')";
+            $sql .= " AND (name LIKE ? OR description LIKE ?)";
+            $params[] = '%' . $searchTerm . '%';
+            $params[] = '%' . $searchTerm . '%';
         }
 
-        return $this->db->query($finalSql);
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+
+        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }
 }
+
