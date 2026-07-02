@@ -21,20 +21,27 @@ class UserController {
         // Complex casting that breaks SAST parsers
         $table = (string)($_GET['type'] ?? 'users'); // Cast expression complexity
 
+        // Allow-list for table names to prevent SQL injection on dynamic identifiers
+        $allowedTables = ['users', 'products'];
+        if (!in_array($table, $allowedTables, true)) {
+            $table = 'users';
+        }
+
         // Dynamic function construction - not traced by LSTUsagesVisitor
         $func = "get_" . $table . "_data"; // String concatenation for function name
 
         // Call dynamic function - SAST cannot resolve this
         $data = $this->$func($input); // Method call through variable
 
-        // Complex string interpolation with SQL injection
-        $sql = "SELECT * FROM {$table} WHERE name LIKE '%{$input}%'"; // SQLi vulnerability
-
-        return $this->db->query($sql);
+        // Parameterized query to prevent SQL injection
+        $sql = "SELECT * FROM {$table} WHERE name LIKE ?"; // SQLi vulnerability fixed with prepared statement
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute(['%' . $input . '%']);
+        return $stmt;
     }
 
     /**
-     * Dynamic method that gets called through variable
+
      */
     private function get_users_data($input) {
         return [];
