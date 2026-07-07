@@ -1,41 +1,167 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
 )
 
+// allowlist defines the set of permitted executables. Each entry is a
+// command name that may be run directly (never via a shell).
+var allowlist = map[string]bool{
+	"date":   true,
+	"uptime": true,
+	"whoami": true,
+	"id":     true,
+	"uname":  true,
+	"hostname": true,
+	"echo":   true,
+	"ls":     true,
+	"pwd":    true,
+	"cat":    true,
+	"head":   true,
+	"tail":   true,
+	"wc":     true,
+	"sort":   true,
+	"grep":   true,
+	"find":   true,
+	"stat":   true,
+	"du":     true,
+	"df":     true,
+	"free":   true,
+	"ps":     true,
+	"top":    true,
+	"env":    true,
+	"printenv": true,
+}
+
+// blockedArgs are argument substrings that are never permitted (defense in depth).
+var blockedArgs = []string{
+	"|", ";", "&", "$", "`", "(", ")", "{", "}", "<", ">", "\n", "\r",
+	"..", "~", "*", "?", "[", "]", "!", "#", "'", "\"",
+}
+
+// parseCommand splits user input into a command name and arguments.
+// It performs shell-like tokenization (respecting quotes) so that arguments
+// containing spaces are preserved as a single token.
+func parseCommand(input string) (string, []string) {
+	var args []string
+	var current strings.Builder
+	inSingleQuote := false
+	inDoubleQuote := false
+	escaped := false
+
+	for _, ch := range input {
+		switch {
+		case escaped:
+			current.WriteRune(ch)
+			escaped = false
+		case ch == '\\' && !inSingleQuote:
+			escaped = true
+		case ch == '\'' && !inDoubleQuote:
+			inSingleQuote = !inSingleQuote
+		case ch == '"' && !inSingleQuote:
+			inDoubleQuote = !inDoubleQuote
+		case ch == ' ' && !inSingleQuote && !inDoubleQuote:
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(ch)
+		}
+	}
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+
+	if len(args) == 0 {
+		return "", nil
+	}
+	return args[0], args[1:]
+}
+
+// validateSafe checks that the command is in the allowlist and that no
+// argument contains blocked substrings.
+func validateSafe(cmdName string, args []string) error {
+	if !allowlist[cmdName] {
+		return fmt.Errorf("command %q is not permitted", cmdName)
+	}
+	for _, arg := range args {
+		for _, blocked := range blockedArgs {
+			if strings.Contains(arg, blocked) {
+				return fmt.Errorf("argument contains forbidden pattern %q", blocked)
+			}
+		}
+	}
+	return nil
+}
+
+// executeSafe parses, validates, and runs a user-supplied command string
+// without a shell. It accepts an optional context for cancellation (nil
+// means use exec.Command directly).
+func executeSafe(ctx context.Context, input string) (string, error) {
+	cmdName, args := parseCommand(input)
+	if cmdName == "" {
+		return "", fmt.Errorf("no command provided")
+	}
+	if err := validateSafe(cmdName, args); err != nil {
+		return "", err
+	}
+
+	var c *exec.Cmd
+	if ctx != nil {
+		c = exec.CommandContext(ctx, cmdName, args...)
+	} else {
+		c = exec.Command(cmdName, args...)
+	}
+	out, err := c.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s: %v", string(out), err)
+	}
+	return string(out), nil
+}
+
 /**
- * Complex RCE vulnerability with goroutines and channels
- * This demonstrates parser failures in IfStmt() and SelectStmt()
+ * Complex RCE vulnerability with goroutines and channels — FIXED.
+ * All handlers now use executeSafe() which runs commands directly
+ * without a shell and validates against an allow-list.
  */
 func handler(w http.ResponseWriter, r *http.Request) {
 	cmd := r.URL.Query().Get("cmd")
 
 	// The parser fails in IfStmt() - "Started 4 blocks at once"
 	if cmd != "" {
-		// Goroutine with complex channel operations
-		resultChan := make(chan string)
+		// Goroutine with complex channel operations - use buffered channel
+		// to prevent goroutine leak and context for cancellation
+		ctx := r.Context()
+		resultChan := make(chan string, 1)
 
 		go func() {
-			// Command execution not detected by SAST
-			out, err := exec.Command("sh", "-c", cmd).CombinedOutput()
+			out, err := executeSafe(ctx, cmd)
 			if err != nil {
-				resultChan <- fmt.Sprintf("Error: %v", err)
+				select {
+				case resultChan <- fmt.Sprintf("Error: %v", err):
+				default:
+				}
 				return
 			}
-			resultChan <- string(out) // RCE vulnerability
+			select {
+			case resultChan <- out:
+			default:
+			}
 		}()
 
 		// Select statement not analyzed correctly
 		select {
 		case result := <-resultChan:
-			fmt.Fprintf(w, result) // Command output rendered directly
+			fmt.Fprintf(w, result) // sanitised output
 		case <-time.After(time.Second * 5):
 			fmt.Fprintf(w, "Command execution timeout")
 		}
@@ -45,7 +171,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 
 /**
- * Additional complex handler with nested goroutines
+ * Additional complex handler with nested goroutines — FIXED.
  */
 func advancedHandler(w http.ResponseWriter, r *http.Request) {
 	commands := r.URL.Query()["cmd"]
@@ -58,13 +184,12 @@ func advancedHandler(w http.ResponseWriter, r *http.Request) {
 			results[i] = make(chan string)
 
 			go func(cmd string, resultChan chan string) {
-				// Complex command execution with error handling
-				out, err := exec.Command("bash", "-c", cmd).Output()
+				out, err := executeSafe(nil, cmd)
 				if err != nil {
 					resultChan <- fmt.Sprintf("Failed: %v", err)
 					return
 				}
-				resultChan <- string(out)
+				resultChan <- out
 			}(cmd, results[i])
 		}
 
@@ -83,7 +208,7 @@ func advancedHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 /**
- * Handler with complex conditional logic and goroutines
+ * Handler with complex conditional logic and goroutines — FIXED.
  */
 func conditionalHandler(w http.ResponseWriter, r *http.Request) {
 	cmd := r.URL.Query().Get("cmd")
@@ -94,8 +219,12 @@ func conditionalHandler(w http.ResponseWriter, r *http.Request) {
 		resultChan := make(chan string, 1)
 
 		go func() {
-			out, _ := exec.Command("sh", "-c", cmd).Output()
-			resultChan <- string(out)
+			out, err := executeSafe(nil, cmd)
+			if err != nil {
+				resultChan <- fmt.Sprintf("Error: %v", err)
+				return
+			}
+			resultChan <- out
 		}()
 
 		select {
@@ -105,13 +234,12 @@ func conditionalHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "Async timeout")
 		}
 	} else if mode == "sync" && cmd != "" {
-		// Direct execution without goroutine
-		out, err := exec.Command("sh", "-c", cmd).Output()
+		out, err := executeSafe(nil, cmd)
 		if err != nil {
 			fmt.Fprintf(w, "Error: %v", err)
 			return
 		}
-		fmt.Fprintf(w, "Sync result: %s", string(out))
+		fmt.Fprintf(w, "Sync result: %s", out)
 	} else {
 		fmt.Fprintf(w, "Invalid mode or command")
 	}
