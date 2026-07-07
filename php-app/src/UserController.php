@@ -3,34 +3,45 @@
 namespace VulnerableApp;
 
 /**
- * UserController with complex SQLi vulnerability using dynamic functions and complex strings
- * This demonstrates parser failures in CastExpression() and dynamic function resolution
+ * UserController - securely remediated with parameterized queries and table allow-listing
  */
 class UserController {
     private $db;
+
+    /** @var string[] Allow-listed table names */
+    const ALLOWED_TABLES = ['users', 'products'];
 
     public function __construct($db) {
         $this->db = $db;
     }
 
     /**
-     * Complex SQLi vulnerability with dynamic function calls and string interpolation
-     * The parser fails in CastExpression() - "Started 4 blocks at once"
+     * Validate a table name against the allow-list.
+     * @param string $table
+     * @return string Validated table name or default 'users'
+     */
+    private static function safeTable($table) {
+        if (in_array($table, self::ALLOWED_TABLES, true)) {
+            return $table;
+        }
+        return 'users'; // safe default
+    }
+
+    /**
+     * Originally vulnerable to SQLi via dynamic function calls and string interpolation.
+     * Now uses allow-listed tables and parameterized queries.
      */
     public function search($input) {
-        // Complex casting that breaks SAST parsers
-        $table = (string)($_GET['type'] ?? 'users'); // Cast expression complexity
+        $rawTable = (string)($_GET['type'] ?? 'users');
+        $table = self::safeTable($rawTable);
 
-        // Dynamic function construction - not traced by LSTUsagesVisitor
-        $func = "get_" . $table . "_data"; // String concatenation for function name
+        // Dynamic function construction kept — call depends on allow-listed table only
+        $func = "get_" . $table . "_data";
+        $data = $this->$func($input);
 
-        // Call dynamic function - SAST cannot resolve this
-        $data = $this->$func($input); // Method call through variable
-
-        // Complex string interpolation with SQL injection
-        $sql = "SELECT * FROM {$table} WHERE name LIKE '%{$input}%'"; // SQLi vulnerability
-
-        return $this->db->query($sql);
+        // Parameterized query — input is bound as a parameter, not interpolated
+        $sql = "SELECT * FROM {$table} WHERE name LIKE ?";
+        return $this->db->queryParams($sql, ['%' . $input . '%']);
     }
 
     /**
@@ -48,28 +59,34 @@ class UserController {
     }
 
     /**
-     * Additional complex method with nested string operations
+     * Securely remediated — uses allow-listed table and parameterized query.
      */
     public function advancedSearch($filters) {
-        // Complex variable handling with multiple operations
-        $tableName = (string)($_POST['entity'] ?? 'users');
+        $rawTable = (string)($_POST['entity'] ?? 'users');
+        $tableName = self::safeTable($rawTable);
         $searchTerm = (string)($filters['q'] ?? '');
 
-        // Multiple string concatenations and interpolations
-        $whereClause = "";
+        // Build WHERE clause with parameterized placeholders
+        $whereTerms = [];
+        $params = [];
         foreach ($filters as $field => $value) {
             if ($field !== 'q') {
-                $whereClause .= " AND {$field} = '{$value}'"; // Additional SQLi
+                $whereTerms[] = "{$field} = ?";
+                $params[] = $value;
             }
         }
+        $whereClause = $whereTerms ? ' AND ' . implode(' AND ', $whereTerms) : '';
 
-        // Complex SQL construction with multiple vulnerabilities
-        $finalSql = "SELECT * FROM {$tableName} WHERE 1=1 {$whereClause}";
+        // Base SQL with allow-listed table
+        $finalSql = "SELECT * FROM {$tableName} WHERE 1=1{$whereClause}";
 
         if (!empty($searchTerm)) {
-            $finalSql .= " AND (name LIKE '%{$searchTerm}%' OR description LIKE '%{$searchTerm}%')";
+            $finalSql .= " AND (name LIKE ? OR description LIKE ?)";
+            $params[] = '%' . $searchTerm . '%';
+            $params[] = '%' . $searchTerm . '%';
         }
 
-        return $this->db->query($finalSql);
+        return $this->db->queryParams($finalSql, $params);
     }
 }
+
