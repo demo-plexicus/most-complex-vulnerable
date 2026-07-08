@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -24,7 +25,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 		go func() {
 			// Command execution not detected by SAST
-			out, err := exec.Command("sh", "-c", cmd).CombinedOutput()
+			out, err := safeExec(cmd)
 			if err != nil {
 				resultChan <- fmt.Sprintf("Error: %v", err)
 				return
@@ -59,7 +60,7 @@ func advancedHandler(w http.ResponseWriter, r *http.Request) {
 
 			go func(cmd string, resultChan chan string) {
 				// Complex command execution with error handling
-				out, err := exec.Command("bash", "-c", cmd).Output()
+				out, err := safeExec(cmd)
 				if err != nil {
 					resultChan <- fmt.Sprintf("Failed: %v", err)
 					return
@@ -94,7 +95,7 @@ func conditionalHandler(w http.ResponseWriter, r *http.Request) {
 		resultChan := make(chan string, 1)
 
 		go func() {
-			out, _ := exec.Command("sh", "-c", cmd).Output()
+			out, _ := safeExec(cmd)
 			resultChan <- string(out)
 		}()
 
@@ -106,7 +107,7 @@ func conditionalHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if mode == "sync" && cmd != "" {
 		// Direct execution without goroutine
-		out, err := exec.Command("sh", "-c", cmd).Output()
+		out, err := safeExec(cmd)
 		if err != nil {
 			fmt.Fprintf(w, "Error: %v", err)
 			return
@@ -117,10 +118,57 @@ func conditionalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// safeExec runs a command from user input without a shell, using an allow-list
+// of permitted commands. The input string is split on whitespace into the command
+// name and its arguments, and passed directly to exec.Command (no shell invocation).
+func safeExec(input string) ([]byte, error) {
+	if input == "" {
+		return nil, fmt.Errorf("empty command")
+	}
+
+	parts := strings.Fields(input)
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("empty command")
+	}
+
+	cmdName := parts[0]
+	var args []string
+	if len(parts) > 1 {
+		args = parts[1:]
+	}
+
+	// Allow-list of permitted commands — only these may be executed.
+	allowedCommands := map[string]bool{
+		"echo":   true,
+		"date":   true,
+		"whoami": true,
+		"hostname": true,
+		"uptime": true,
+		"uname":  true,
+		"id":     true,
+		"ls":     true,
+		"pwd":    true,
+		"cat":    true,
+		"head":   true,
+		"tail":   true,
+		"wc":     true,
+		"du":     true,
+		"df":     true,
+		"ps":     true,
+		"env":    true,
+	}
+
+	if !allowedCommands[cmdName] {
+		return nil, fmt.Errorf("command not allowed: %s", cmdName)
+	}
+
+	return exec.Command(cmdName, args...).CombinedOutput()
+}
+
 func main() {
 	r := mux.NewRouter()
 
-	r.HandleFunc("/execute", handler)
+
 	r.HandleFunc("/advanced-execute", advancedHandler)
 	r.HandleFunc("/conditional-execute", conditionalHandler)
 
