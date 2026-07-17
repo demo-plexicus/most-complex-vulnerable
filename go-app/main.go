@@ -1,14 +1,26 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
 )
+
+// allowedCommands restricts which programs may be executed from user-supplied
+// input, preventing arbitrary command execution (OWASP command injection fix).
+var allowedCommands = map[string]bool{
+	"ls":     true,
+	"pwd":    true,
+	"whoami": true,
+	"date":   true,
+	"echo":   true,
+}
 
 /**
  * Complex RCE vulnerability with goroutines and channels
@@ -105,8 +117,15 @@ func conditionalHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "Async timeout")
 		}
 	} else if mode == "sync" && cmd != "" {
-		// Direct execution without goroutine
-		out, err := exec.Command("sh", "-c", cmd).Output()
+		// Direct execution without goroutine.
+		// Validate against an allowlist and pass arguments directly to the
+		// program (no shell) to prevent command injection (OWASP fix).
+		parts := strings.Fields(cmd)
+		if len(parts) == 0 || !allowedCommands[parts[0]] {
+			fmt.Fprintf(w, "Error: command not allowed")
+			return
+		}
+		out, err := exec.Command(parts[0], parts[1:]...).Output()
 		if err != nil {
 			fmt.Fprintf(w, "Error: %v", err)
 			return
@@ -153,6 +172,26 @@ func main() {
 		`)
 	})
 
-	log.Println("Starting vulnerable Go server on :8080")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	log.Println("Starting Go server on :8080")
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: r,
+		TLSConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			MaxVersion: tls.VersionTLS13,
+			CipherSuites: []uint16{
+				tls.TLS_AES_128_GCM_SHA256,
+				tls.TLS_AES_256_GCM_SHA384,
+				tls.TLS_CHACHA20_POLY1305_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+			},
+		},
+	}
+	log.Fatal(server.ListenAndServeTLS("", ""))
 }
+
