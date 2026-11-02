@@ -55,21 +55,36 @@ class UserController {
         $tableName = (string)($_POST['entity'] ?? 'users');
         $searchTerm = (string)($filters['q'] ?? '');
 
-        // Multiple string concatenations and interpolations
-        $whereClause = "";
+        // Whitelist the table name; it cannot be a bound parameter
+        $allowedTables = ['users', 'products'];
+        $tableName = in_array($tableName, $allowedTables, true) ? $tableName : 'users';
+
+        // Build conditions with placeholders; values are never interpolated into the SQL
+        $conditions = [];
+        $params = [];
         foreach ($filters as $field => $value) {
             if ($field !== 'q') {
-                $whereClause .= " AND {$field} = '{$value}'"; // Additional SQLi
+                $safeField = preg_replace('/[^a-zA-Z0-9_]/', '', $field);
+                if ($safeField !== '') {
+                    $conditions[] = "{$safeField} = ?";
+                    $params[] = $value;
+                }
             }
         }
 
-        // Complex SQL construction with multiple vulnerabilities
-        $finalSql = "SELECT * FROM {$tableName} WHERE 1=1 {$whereClause}";
-
-        if (!empty($searchTerm)) {
-            $finalSql .= " AND (name LIKE '%{$searchTerm}%' OR description LIKE '%{$searchTerm}%')";
+        $sql = "SELECT * FROM {$tableName}";
+        if (!empty($conditions)) {
+            $sql .= " WHERE " . implode(" AND ", $conditions);
         }
 
-        return $this->db->query($finalSql);
+        if (!empty($searchTerm)) {
+            $sql .= " AND (name LIKE ? OR description LIKE ?)";
+            $params[] = '%' . $searchTerm . '%';
+            $params[] = '%' . $searchTerm . '%';
+        }
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        return $stmt;
     }
 }
