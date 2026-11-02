@@ -52,24 +52,35 @@ class UserController {
      */
     public function advancedSearch($filters) {
         // Complex variable handling with multiple operations
+        // Whitelist table name to prevent SQL injection via identifier
         $tableName = (string)($_POST['entity'] ?? 'users');
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $tableName)) {
+            $tableName = 'users';
+        }
         $searchTerm = (string)($filters['q'] ?? '');
 
-        // Multiple string concatenations and interpolations
-        $whereClause = "";
+        // Build parameterized conditions; column names are whitelisted identifiers
+        $whereParts = [];
+        $params = [];
         foreach ($filters as $field => $value) {
-            if ($field !== 'q') {
-                $whereClause .= " AND {$field} = '{$value}'"; // Additional SQLi
+            if ($field !== 'q' && preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', (string)$field)) {
+                $whereParts[] = " AND `{$field}` = ?";
+                $params[] = $value;
             }
         }
 
-        // Complex SQL construction with multiple vulnerabilities
-        $finalSql = "SELECT * FROM {$tableName} WHERE 1=1 {$whereClause}";
+        $finalSql = "SELECT * FROM `{$tableName}` WHERE 1=1";
 
         if (!empty($searchTerm)) {
-            $finalSql .= " AND (name LIKE '%{$searchTerm}%' OR description LIKE '%{$searchTerm}%')";
+            $finalSql .= " AND (name LIKE ? OR description LIKE ?)";
+            $params[] = '%' . $searchTerm . '%';
+            $params[] = '%' . $searchTerm . '%';
         }
 
-        return $this->db->query($finalSql);
+        $finalSql .= implode('', $whereParts);
+
+        $stmt = $this->db->prepare($finalSql);
+        $stmt->execute($params);
+        return $stmt;
     }
 }
