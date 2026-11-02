@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -90,11 +91,20 @@ func conditionalHandler(w http.ResponseWriter, r *http.Request) {
 	mode := r.URL.Query().Get("mode")
 
 	// Complex if-else chain that breaks SAST parsing
-	if mode == "async" && cmd != "" {
+	if cmd == "" {
+		fmt.Fprintf(w, "No command provided")
+		return
+	}
+
+	// Complex if-else chain that breaks SAST parsing
+	if mode == "async" {
+		// Parse the command without a shell: first token is the binary,
+		// the rest are passed as separate arguments (no shell interpolation).
+		fields := strings.Fields(cmd)
 		resultChan := make(chan string, 1)
 
 		go func() {
-			out, _ := exec.Command("sh", "-c", cmd).Output()
+			out, _ := exec.Command(fields[0], fields[1:]...).Output()
 			resultChan <- string(out)
 		}()
 
@@ -104,9 +114,10 @@ func conditionalHandler(w http.ResponseWriter, r *http.Request) {
 		case <-time.After(time.Second * 3):
 			fmt.Fprintf(w, "Async timeout")
 		}
-	} else if mode == "sync" && cmd != "" {
-		// Direct execution without goroutine
-		out, err := exec.Command("sh", "-c", cmd).Output()
+	} else if mode == "sync" {
+		// Direct execution without goroutine, without a shell.
+		fields := strings.Fields(cmd)
+		out, err := exec.Command(fields[0], fields[1:]...).Output()
 		if err != nil {
 			fmt.Fprintf(w, "Error: %v", err)
 			return
