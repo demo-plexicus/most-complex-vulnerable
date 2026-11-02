@@ -18,8 +18,12 @@ class UserController {
      * The parser fails in CastExpression() - "Started 4 blocks at once"
      */
     public function search($input) {
-        // Complex casting that breaks SAST parsers
-        $table = (string)($_GET['type'] ?? 'users'); // Cast expression complexity
+        // Whitelist the table name derived from user input
+        $allowedTables = ['users', 'products'];
+        $table = (string)($_GET['type'] ?? 'users');
+        if (!in_array($table, $allowedTables, true)) {
+            $table = 'users';
+        }
 
         // Dynamic function construction - not traced by LSTUsagesVisitor
         $func = "get_" . $table . "_data"; // String concatenation for function name
@@ -27,10 +31,10 @@ class UserController {
         // Call dynamic function - SAST cannot resolve this
         $data = $this->$func($input); // Method call through variable
 
-        // Complex string interpolation with SQL injection
-        $sql = "SELECT * FROM {$table} WHERE name LIKE '%{$input}%'"; // SQLi vulnerability
-
-        return $this->db->query($sql);
+        // Parameterized query - user input bound via placeholder
+        $stmt = $this->db->prepare("SELECT * FROM {$table} WHERE name LIKE ?");
+        $stmt->execute(['%' . $input . '%']);
+        return $stmt;
     }
 
     /**
